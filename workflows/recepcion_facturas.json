@@ -1,0 +1,683 @@
+[
+  {
+    "name": "Recepción automatizada de facturas",
+    "nodes": [
+      {
+        "parameters": {
+          "formTitle": "Recepción automatizada de facturas",
+          "formDescription": "Carga una factura PDF. El sistema extrae datos, consulta proveedor y orden de compra en el ERP y solo registra cuando RUN_MODE está en live.",
+          "formFields": {
+            "values": [
+              {
+                "fieldLabel": "Factura PDF",
+                "fieldType": "file",
+                "acceptFileTypes": ".pdf",
+                "requiredField": true
+              }
+            ]
+          },
+          "responseMode": "lastNode",
+          "options": {
+            "path": "recepcion-facturas",
+            "buttonLabel": "Procesar factura"
+          }
+        },
+        "id": "5c2d3873-ac1d-4470-a78e-4b1620e2afec",
+        "name": "Recibir factura PDF",
+        "type": "n8n-nodes-base.formTrigger",
+        "typeVersion": 2.6,
+        "position": [
+          0,
+          300
+        ],
+        "webhookId": "2771bc3a-e873-44d9-83e9-f8cf07ae88b7"
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "http://127.0.0.1:8000/api/documents/upload",
+          "sendBody": true,
+          "contentType": "multipart-form-data",
+          "bodyParameters": {
+            "parameters": [
+              {
+                "parameterType": "formBinaryData",
+                "name": "file",
+                "inputDataFieldName": "Factura_PDF"
+              }
+            ]
+          },
+          "options": {
+            "response": {
+              "response": {
+                "fullResponse": true,
+                "neverError": true,
+                "responseFormat": "json"
+              }
+            }
+          }
+        },
+        "id": "81db2b6f-a174-461d-941e-b13e7f592fdc",
+        "name": "Extraer datos del PDF",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          260,
+          300
+        ]
+      },
+      {
+        "parameters": {
+          "method": "GET",
+          "url": "=http://192.168.15.113:8000/proveedores/{{$('Extraer datos del PDF').first().json.body.invoice.ruc || 'NO_IDENTIFICADO'}}",
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpBearerAuth",
+          "options": {
+            "response": {
+              "response": {
+                "fullResponse": true,
+                "neverError": true,
+                "responseFormat": "json"
+              }
+            }
+          }
+        },
+        "id": "f2ae3a6a-f12f-4dde-b300-5f2cba204452",
+        "name": "Consultar proveedor",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          520,
+          300
+        ],
+        "credentials": {
+          "httpBearerAuth": {
+            "id": "P1x5o9V2k4a7b3c8",
+            "name": "ERP API - pruebas"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "method": "GET",
+          "url": "=http://192.168.15.113:8000/ordenes-compra/{{$('Extraer datos del PDF').first().json.body.invoice.purchase_order || 'NO_IDENTIFICADA'}}",
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpBearerAuth",
+          "options": {
+            "response": {
+              "response": {
+                "fullResponse": true,
+                "neverError": true,
+                "responseFormat": "json"
+              }
+            }
+          }
+        },
+        "id": "d5ebb832-22e4-4f61-bf2e-df2ef3a45d39",
+        "name": "Consultar orden de compra",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          780,
+          300
+        ],
+        "credentials": {
+          "httpBearerAuth": {
+            "id": "P1x5o9V2k4a7b3c8",
+            "name": "ERP API - pruebas"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "method": "GET",
+          "url": "http://192.168.15.113:8000/facturas",
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpBearerAuth",
+          "options": {
+            "response": {
+              "response": {
+                "fullResponse": true,
+                "neverError": true,
+                "responseFormat": "json"
+              }
+            }
+          }
+        },
+        "id": "ae1a22b1-3697-4f13-ab0b-f9812fbee244",
+        "name": "Consultar facturas existentes",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          1040,
+          300
+        ],
+        "credentials": {
+          "httpBearerAuth": {
+            "id": "P1x5o9V2k4a7b3c8",
+            "name": "ERP API - pruebas"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "mode": "runOnceForAllItems",
+          "jsCode": "const api = $('Extraer datos del PDF').first().json;\nconst body = api.body || {};\nconst invoice = body.invoice || {};\nconst provider = $('Consultar proveedor').first().json;\nconst po = $('Consultar orden de compra').first().json;\nconst existingResult = $('Consultar facturas existentes').first().json;\nconst reasons = [];\nif (!invoice.invoice_number || !invoice.ruc || !invoice.date || !invoice.purchase_order || invoice.subtotal == null || invoice.tax == null || invoice.total == null) {\n  reasons.push(body.message || 'No se pudieron extraer todos los datos obligatorios de la factura.');\n}\nif (api.statusCode !== 201 || (invoice.status && invoice.status !== 'processed')) {\n  const details = Array.isArray(invoice.validation_errors) ? invoice.validation_errors.join('; ') : '';\n  reasons.push(details || body.message || 'La factura requiere revisión y no puede registrarse.');\n}\nif (provider.statusCode !== 200) reasons.push(`No se encontró el proveedor ${invoice.ruc || 'del RUC indicado'} en el ERP.`);\nelse if (String(provider.body?.estado || '').toUpperCase() !== 'ACTIVO') reasons.push(`El proveedor ${invoice.ruc} existe, pero no está activo.`);\nif (po.statusCode !== 200) reasons.push(`No se encontró la orden de compra ${invoice.purchase_order || 'indicada'} en el ERP.`);\nelse {\n  const orderBody = po.body || {};\n  if (orderBody.ruc_proveedor !== invoice.ruc) reasons.push('La orden de compra pertenece a un RUC distinto al emisor de la factura.');\n  if (String(orderBody.estado || '').toUpperCase() !== 'APROBADA') reasons.push(`La orden de compra ${invoice.purchase_order} no está aprobada.`);\n  const close = (a,b) => Math.abs(Number(a)-Number(b)) <= 0.02;\n  if (!close(orderBody.subtotal, invoice.subtotal) || !close(orderBody.iva, invoice.tax) || !close(orderBody.total, invoice.total)) reasons.push('Los importes de la factura no coinciden con la orden de compra.');\n}\nconst records = Array.isArray(existingResult.body) ? existingResult.body : [];\nif (existingResult.statusCode !== 200) reasons.push('No se pudo consultar el historial de facturas del ERP.');\nelse if (records.some(r => r.ruc === invoice.ruc && r.numero_factura === invoice.invoice_number)) reasons.push(`La factura ${invoice.invoice_number || ''} ya está registrada en el ERP.`);\nreturn [{json:{invoice, ok:reasons.length===0, reason:reasons.join(' '), run_mode:($('Leer modo de corrida').first().json.body?.run_mode || 'dry')}}];"
+        },
+        "id": "d6689531-01c9-4730-a4ce-337bc63ca71d",
+        "name": "Validar contra ERP y decidir",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1300,
+          300
+        ]
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": "",
+              "typeValidation": "strict",
+              "version": 2
+            },
+            "conditions": [
+              {
+                "id": "795f0619-cd9b-4c02-96bd-89f8f000e86b",
+                "leftValue": "={{ $json.ok }}",
+                "rightValue": true,
+                "operator": {
+                  "type": "boolean",
+                  "operation": "equals"
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        },
+        "id": "d8ee6dcc-852e-4f49-ba13-291c3a66d89f",
+        "name": "¿Factura válida?",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2,
+        "position": [
+          1540,
+          300
+        ]
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": "",
+              "typeValidation": "strict",
+              "version": 2
+            },
+            "conditions": [
+              {
+                "id": "2f7577f2-f0f4-4bd6-8eb6-12d5cf44bfe2",
+                "leftValue": "={{ $json.run_mode }}",
+                "rightValue": "live",
+                "operator": {
+                  "type": "string",
+                  "operation": "equals"
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        },
+        "id": "0567f7c3-3500-4de0-ae42-83aff70ed489",
+        "name": "¿Modo live?",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2,
+        "position": [
+          1760,
+          200
+        ]
+      },
+      {
+        "parameters": {
+          "mode": "runOnceForAllItems",
+          "jsCode": "const d=$input.first().json; return [{json:{estado:'dry', mensaje:'Validación ERP correcta. RUN_MODE=dry: no se registró la factura y no se envió correo.', numero_factura:d.invoice.invoice_number, ruc:d.invoice.ruc, orden_compra:d.invoice.purchase_order}}];"
+        },
+        "id": "883bc0af-e528-47c4-adae-6077417fc737",
+        "name": "Resultado seguro (dry)",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1980,
+          80
+        ]
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "http://192.168.15.113:8000/facturas",
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpBearerAuth",
+          "sendBody": true,
+          "contentType": "json",
+          "specifyBody": "json",
+          "jsonBody": "={{ {ruc:$json.invoice.ruc, numero_factura:$json.invoice.invoice_number, fecha_emision:$json.invoice.date, orden_compra:$json.invoice.purchase_order, subtotal:$json.invoice.subtotal, iva:$json.invoice.tax, total:$json.invoice.total} }}",
+          "options": {
+            "response": {
+              "response": {
+                "fullResponse": true,
+                "neverError": true,
+                "responseFormat": "json"
+              }
+            }
+          }
+        },
+        "id": "b65a0b71-29c0-48ba-bc90-a99772f4791a",
+        "name": "Registrar factura en ERP",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          1980,
+          300
+        ],
+        "credentials": {
+          "httpBearerAuth": {
+            "id": "P1x5o9V2k4a7b3c8",
+            "name": "ERP API - pruebas"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "mode": "runOnceForAllItems",
+          "jsCode": "const d=$('Validar contra ERP y decidir').first().json; const r=$input.first().json; const ok=r.statusCode===201; return [{json:{...d, registrado:ok, reason:ok?'':(r.body?.detail || `El ERP respondió HTTP ${r.statusCode}; no se confirmó el registro.`), erp_response:r.body}}];"
+        },
+        "id": "e3ca1c6a-d170-46dc-8b97-3db7ce4cd9d2",
+        "name": "Comprobar respuesta ERP",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          2220,
+          300
+        ]
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": "",
+              "typeValidation": "strict",
+              "version": 2
+            },
+            "conditions": [
+              {
+                "id": "fbdebc8e-9cc1-4fcf-be5d-1929c5af65d1",
+                "leftValue": "={{ $json.registrado }}",
+                "rightValue": true,
+                "operator": {
+                  "type": "boolean",
+                  "operation": "equals"
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        },
+        "id": "b3c686c3-8283-44f0-9b45-43985d1a7061",
+        "name": "¿ERP confirmó registro?",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2,
+        "position": [
+          2440,
+          300
+        ]
+      },
+      {
+        "parameters": {
+          "mode": "runOnceForAllItems",
+          "jsCode": "const d=$input.first().json; return [{json:{estado:'registrada', mensaje:'Factura registrada correctamente en el ERP. No se envió correo.', numero_factura:d.invoice.invoice_number, ruc:d.invoice.ruc, referencia:d.erp_response?.id}}];"
+        },
+        "id": "bb36a900-3436-4aa1-a14a-6393c72f0a9e",
+        "name": "Confirmación de registro",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          2660,
+          200
+        ]
+      },
+      {
+        "parameters": {
+          "mode": "runOnceForAllItems",
+          "jsCode": "const d=$input.first().json; return [{json:{...d, reason:d.reason || 'El ERP no confirmó el registro.'}}];"
+        },
+        "id": "b1b42dd2-9a92-4161-813b-43b238f0191d",
+        "name": "Preparar aviso por error de ERP",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          2660,
+          420
+        ]
+      },
+      {
+        "parameters": {
+          "resource": "email",
+          "operation": "send",
+          "fromEmail": "andyoswaldo95@gmail.com",
+          "toEmail": "avisos-andy@prueba.local",
+          "subject": "=Factura {{$json.invoice.invoice_number || \"sin número\"}} no registrada",
+          "emailFormat": "text",
+          "text": "=Factura: {{$json.invoice.invoice_number || \"No identificada\"}}\nRUC del emisor: {{$json.invoice.ruc || \"No identificado\"}}\nOrden de compra: {{$json.invoice.purchase_order || \"No identificada\"}}\nMotivo: {{$json.reason}}\n\nLa factura no fue registrada en el ERP.",
+          "options": {}
+        },
+        "id": "3ee4c6af-326e-4f21-bef0-5ca596bd024a",
+        "name": "Avisar rechazo por correo",
+        "type": "n8n-nodes-base.emailSend",
+        "typeVersion": 2.1,
+        "position": [
+          2900,
+          520
+        ],
+        "credentials": {
+          "smtp": {
+            "id": "y2odR06qI22JZNr5",
+            "name": "SMTP account"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "mode": "runOnceForAllItems",
+          "jsCode": "const d=$('Avisar rechazo por correo').first().json; return [{json:{estado:'rechazada', mensaje:'Factura no registrada. Aviso enviado al buzón local.', numero_factura:d.invoice.invoice_number, ruc:d.invoice.ruc, motivo:d.reason}}];"
+        },
+        "id": "6950455a-4add-41a6-b238-9e5bd1d7d43a",
+        "name": "Confirmar aviso enviado",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          3140,
+          520
+        ]
+      },
+      {
+        "parameters": {
+          "method": "GET",
+          "url": "http://127.0.0.1:8000/health",
+          "options": {
+            "response": {
+              "response": {
+                "fullResponse": true,
+                "neverError": true,
+                "responseFormat": "json"
+              }
+            }
+          }
+        },
+        "id": "71286916-1d1f-4189-8f9e-d1bf2066bcfc",
+        "name": "Leer modo de corrida",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          1300,
+          300
+        ]
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": "",
+              "typeValidation": "strict",
+              "version": 2
+            },
+            "conditions": [
+              {
+                "id": "19aca49f-3fc1-4506-a407-8bba241c711c",
+                "leftValue": "={{ $json.run_mode }}",
+                "rightValue": "live",
+                "operator": {
+                  "type": "string",
+                  "operation": "equals"
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        },
+        "id": "5784fc46-2abd-4687-b1aa-694825fde276",
+        "name": "¿Modo live para aviso?",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2,
+        "position": [
+          1780,
+          500
+        ]
+      },
+      {
+        "parameters": {
+          "mode": "runOnceForAllItems",
+          "jsCode": "const d=$input.first().json; return [{json:{estado:'rechazada', mensaje:'Factura no registrada. RUN_MODE=dry: no se envió correo.', numero_factura:d.invoice.invoice_number, ruc:d.invoice.ruc, motivo:d.reason}}];"
+        },
+        "id": "05d7cd94-2a1d-4d07-b1df-013be25bf522",
+        "name": "Resultado dry - rechazo",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          2020,
+          620
+        ]
+      }
+    ],
+    "connections": {
+      "Recibir factura PDF": {
+        "main": [
+          [
+            {
+              "node": "Extraer datos del PDF",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Extraer datos del PDF": {
+        "main": [
+          [
+            {
+              "node": "Consultar proveedor",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Consultar proveedor": {
+        "main": [
+          [
+            {
+              "node": "Consultar orden de compra",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Consultar orden de compra": {
+        "main": [
+          [
+            {
+              "node": "Consultar facturas existentes",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Consultar facturas existentes": {
+        "main": [
+          [
+            {
+              "node": "Leer modo de corrida",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Validar contra ERP y decidir": {
+        "main": [
+          [
+            {
+              "node": "¿Factura válida?",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "¿Factura válida?": {
+        "main": [
+          [
+            {
+              "node": "¿Modo live?",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "¿Modo live para aviso?",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "¿Modo live?": {
+        "main": [
+          [
+            {
+              "node": "Registrar factura en ERP",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Resultado seguro (dry)",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Registrar factura en ERP": {
+        "main": [
+          [
+            {
+              "node": "Comprobar respuesta ERP",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Comprobar respuesta ERP": {
+        "main": [
+          [
+            {
+              "node": "¿ERP confirmó registro?",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "¿ERP confirmó registro?": {
+        "main": [
+          [
+            {
+              "node": "Confirmación de registro",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Preparar aviso por error de ERP",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Preparar aviso por error de ERP": {
+        "main": [
+          [
+            {
+              "node": "Avisar rechazo por correo",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Avisar rechazo por correo": {
+        "main": [
+          [
+            {
+              "node": "Confirmar aviso enviado",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Leer modo de corrida": {
+        "main": [
+          [
+            {
+              "node": "Validar contra ERP y decidir",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "¿Modo live para aviso?": {
+        "main": [
+          [
+            {
+              "node": "Avisar rechazo por correo",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Resultado dry - rechazo",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "settings": {
+      "executionOrder": "v1",
+      "saveExecutionProgress": true
+    },
+    "active": false,
+    "versionId": "609c9fba-5b37-4160-9378-8ca5c3a6e55d",
+    "meta": {
+      "templateCredsSetupCompleted": true
+    },
+    "id": "HrCWQAp89AwyjdO7"
+  }
+]
